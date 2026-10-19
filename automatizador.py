@@ -1,4 +1,3 @@
-
 import os
 import json
 import datetime
@@ -7,15 +6,13 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# ---------------------------------------------------------
-# 1. Configuración e Identificadores
-# ---------------------------------------------------------
 SCOPES = [
     'https://www.googleapis.com/auth/youtube',
     'https://www.googleapis.com/auth/blogger'
 ]
 
-BLOG_ID = '3318214309328221768'
+# Si el ID directo falla, el script intentará buscar tu blog automáticamente
+BLOG_ID_CONFIGURADO = '3318214309328221768'
 
 CANAL_VOZ_MUJER = 'UCGfoI7v6hNipgiG8C_IJjfQ'
 CANAL_SON_DEL_23 = 'UCCoHvADohOJ0sWevJBZ9h9A'
@@ -27,9 +24,6 @@ PROGRAMAS_SON_DEL_23 = [
     "la nota cultural"
 ]
 
-# ---------------------------------------------------------
-# 2. Autenticación
-# ---------------------------------------------------------
 def obtener_credenciales():
     token_env = os.environ.get('GOOGLE_TOKEN_JSON')
     if token_env:
@@ -46,15 +40,28 @@ def main():
     youtube = build('youtube', 'v3', credentials=creds)
     blogger = build('blogger', 'v3', credentials=creds)
 
+    # Verificar blogs disponibles en la cuenta para evitar errores 404
+    try:
+        user_blogs = blogger.blogs().listByUser(userId='self').execute()
+        if 'items' in user_blogs and len(user_blogs['items']) > 0:
+            print("Blogs encontrados en tu cuenta:")
+            for b in user_blogs['items']:
+                print(f" - Nombre: {b['name']} | ID: {b['id']} | URL: {b['url']}")
+            # Usa automáticamente el primer blog válido encontrado
+            blog_id = user_blogs['items'][0]['id']
+        else:
+            blog_id = BLOG_ID_CONFIGURADO
+    except Exception as e:
+        print(f"No se pudo listar los blogs automáticamente: {e}")
+        blog_id = BLOG_ID_CONFIGURADO
+
     fecha_hoy = datetime.date.today()
     hace_siete_dias = fecha_hoy - datetime.timedelta(days=7)
     publicado_despues = hace_siete_dias.strftime('%Y-%m-%dT00:00:00Z')
 
     videos_recolectados = []
 
-    # ---------------------------------------------------------
-    # 3. Recolectar videos de "La Voz de la Mujer Bolivariana"
-    # ---------------------------------------------------------
+    # Recolectar videos de La Voz de la Mujer Bolivariana
     res_mujer = youtube.search().list(
         part='snippet',
         channelId=CANAL_VOZ_MUJER,
@@ -62,13 +69,10 @@ def main():
         type='video',
         maxResults=25
     ).execute()
-
     for item in res_mujer.get('items', []):
         videos_recolectados.append(item['id']['videoId'])
 
-    # ---------------------------------------------------------
-    # 4. Recolectar videos filtrados de "Radio Al Son Del 23"
-    # ---------------------------------------------------------
+    # Recolectar videos filtrados de Radio Al Son Del 23
     res_son = youtube.search().list(
         part='snippet',
         channelId=CANAL_SON_DEL_23,
@@ -76,7 +80,6 @@ def main():
         type='video',
         maxResults=25
     ).execute()
-
     for item in res_son.get('items', []):
         titulo = item['snippet']['title'].lower()
         if any(prog in titulo for prog in PROGRAMAS_SON_DEL_23):
@@ -86,11 +89,8 @@ def main():
         print("No se encontraron videos nuevos en los últimos 7 días. Finalizando.")
         return
 
-    # ---------------------------------------------------------
-    # 5. Crear la Playlist Semanal en YouTube
-    # ---------------------------------------------------------
+    # Crear Playlist en YouTube
     nombre_playlist = f"Resumen Comunal Semanal - {fecha_hoy.strftime('%d/%m/%Y')}"
-    
     playlist = youtube.playlists().insert(
         part='snippet,status',
         body={
@@ -107,7 +107,6 @@ def main():
     playlist_id = playlist['id']
     print(f"Playlist creada con éxito. ID: {playlist_id}")
 
-    # Agregar videos a la playlist con pausa y manejo de errores
     for video_id in videos_recolectados:
         try:
             youtube.playlistItems().insert(
@@ -122,14 +121,11 @@ def main():
                     }
                 }
             ).execute()
-            print(f"Video {video_id} agregado correctamente.")
-            time.sleep(1)  # Pausa para evitar rate-limits/error 409
+            time.sleep(1)
         except HttpError as err:
-            print(f"Advertencia: No se pudo agregar el video {video_id}: {err}")
+            print(f"Advertencia al agregar video {video_id}: {err}")
 
-    # ---------------------------------------------------------
-    # 6. Publicar en Blogger con iframe estándar
-    # ---------------------------------------------------------
+    # Publicar en Blogger
     codigo_iframe = f'''<div style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; background: #000; border-radius: 8px; overflow: hidden;">
     <iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" 
             src="https://www.youtube.com/embed/videoseries?list={playlist_id}&autoplay=1" 
@@ -144,7 +140,7 @@ def main():
     }
 
     post_creado = blogger.posts().insert(
-        blogId=BLOG_ID,
+        blogId=blog_id,
         body=blog_post
     ).execute()
 
