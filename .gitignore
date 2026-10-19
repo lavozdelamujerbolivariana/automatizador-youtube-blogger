@@ -1,0 +1,7 @@
+token.json
+client_secret.json
+venv/
+cron.log
+reproductor_actualizado.html
+.vscode/
+__pycache__/
