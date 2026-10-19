@@ -1,0 +1,31 @@
+name: Automatizador Semanal YouTube y Blogger
+
+on:
+  schedule:
+    # Corre todos los domingos a las 22:00 UTC (6:00 PM hora de Venezuela / UTC-4)
+    - cron: '0 22 * * 0'
+  workflow_dispatch: # Permite ejecución manual desde GitHub
+
+jobs:
+  run-python-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ejecutar automatizador
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: |
+          python automatizador.py
