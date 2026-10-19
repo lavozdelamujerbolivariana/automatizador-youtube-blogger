@@ -1,8 +1,11 @@
+
 import os
 import json
 import datetime
+import time
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # ---------------------------------------------------------
 # 1. Configuración e Identificadores
@@ -12,14 +15,11 @@ SCOPES = [
     'https://www.googleapis.com/auth/blogger'
 ]
 
-# ID de tu Blog en Blogger
 BLOG_ID = '3318214309328221768'
 
-# Canales de YouTube
 CANAL_VOZ_MUJER = 'UCGfoI7v6hNipgiG8C_IJjfQ'
 CANAL_SON_DEL_23 = 'UCCoHvADohOJ0sWevJBZ9h9A'
 
-# Filtro estricto para Radio Al Son Del 23
 PROGRAMAS_SON_DEL_23 = [
     "pueblo comunicador",
     "misión en amor mayor",
@@ -28,16 +28,14 @@ PROGRAMAS_SON_DEL_23 = [
 ]
 
 # ---------------------------------------------------------
-# 2. Autenticación (Soporta GitHub Actions y ejecuciones locales)
+# 2. Autenticación
 # ---------------------------------------------------------
 def obtener_credenciales():
-    # Intenta leer desde la variable de entorno (GitHub Actions)
     token_env = os.environ.get('GOOGLE_TOKEN_JSON')
     if token_env:
         info_token = json.loads(token_env)
         return Credentials.from_authorized_user_info(info_token, SCOPES)
     
-    # Si se ejecuta en local, usa el archivo token.json
     if os.path.exists('token.json'):
         return Credentials.from_authorized_user_file('token.json', SCOPES)
     
@@ -109,23 +107,28 @@ def main():
     playlist_id = playlist['id']
     print(f"Playlist creada con éxito. ID: {playlist_id}")
 
-    # Agregar videos a la playlist
+    # Agregar videos a la playlist con pausa y manejo de errores
     for video_id in videos_recolectados:
-        youtube.playlistItems().insert(
-            part='snippet',
-            body={
-                'snippet': {
-                    'playlistId': playlist_id,
-                    'resourceId': {
-                        'kind': 'youtube#video',
-                        'videoId': video_id
+        try:
+            youtube.playlistItems().insert(
+                part='snippet',
+                body={
+                    'snippet': {
+                        'playlistId': playlist_id,
+                        'resourceId': {
+                            'kind': 'youtube#video',
+                            'videoId': video_id
+                        }
                     }
                 }
-            }
-        ).execute()
+            ).execute()
+            print(f"Video {video_id} agregado correctamente.")
+            time.sleep(1)  # Pausa para evitar rate-limits/error 409
+        except HttpError as err:
+            print(f"Advertencia: No se pudo agregar el video {video_id}: {err}")
 
     # ---------------------------------------------------------
-    # 6. Publicar en Blogger con iframe estándar (Sin bloqueos JS)
+    # 6. Publicar en Blogger con iframe estándar
     # ---------------------------------------------------------
     codigo_iframe = f'''<div style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; background: #000; border-radius: 8px; overflow: hidden;">
     <iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" 
