@@ -2,6 +2,9 @@ import os
 import json
 import datetime
 import time
+import urllib.request
+import urllib.parse
+import base64
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -60,7 +63,7 @@ CANALES_GENERALES = [
 ]
 
 # ---------------------------------------------------------
-# 2. Autenticación
+# 2. Autenticación y Notificaciones
 # ---------------------------------------------------------
 def obtener_credenciales():
     token_env = os.environ.get('GOOGLE_TOKEN_JSON')
@@ -73,12 +76,66 @@ def obtener_credenciales():
     
     raise FileNotFoundError("No se encontraron credenciales en GOOGLE_TOKEN_JSON ni en token.json")
 
+def enviar_notificaciones_telegram(mensaje):
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chats_destino = ["5164937007", "-1002636268384"] # Chat personal y Grupo ComunaTv
+    
+    if not token:
+        print("Telegram no configurado.")
+        return
+    
+    for chat_id in chats_destino:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({
+            'chat_id': chat_id, 
+            'text': mensaje, 
+            'parse_mode': 'Markdown'
+        }).encode('utf-8')
+        
+        try:
+            req = urllib.request.Request(url, data=data)
+            with urllib.request.urlopen(req) as response:
+                print(f"✅ Notificación enviada a Telegram (ID: {chat_id}).")
+        except Exception as e:
+            print(f"❌ Error en Telegram para ID {chat_id}: {e}")
+
+def enviar_whatsapp_twilio(mensaje):
+    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+    auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+    from_whatsapp = os.environ.get('TWILIO_WHATSAPP_FROM')
+    to_whatsapp = os.environ.get('WHATSAPP_TO_GROUP')
+
+    if not all([account_sid, auth_token, from_whatsapp, to_whatsapp]):
+        print("Twilio/WhatsApp no configurado. Saltando.")
+        return
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+    auth_str = f"{account_sid}:{auth_token}"
+    encoded_auth = base64.b64encode(auth_str.encode('ascii')).decode('ascii')
+    
+    data = urllib.parse.urlencode({
+        'From': from_whatsapp,
+        'To': to_whatsapp,
+        'Body': mensaje
+    }).encode('utf-8')
+
+    try:
+        req = urllib.request.Request(url, data=data, method='POST')
+        req.add_header('Authorization', f'Basic {encoded_auth}')
+        with urllib.request.urlopen(req) as response:
+            print("✅ Mensaje enviado a WhatsApp con éxito.")
+    except Exception as e:
+        print(f"❌ Error al enviar WhatsApp: {e}")
+
+# ---------------------------------------------------------
+# 3. Función Principal
+# ---------------------------------------------------------
 def main():
     creds = obtener_credenciales()
     youtube = build('youtube', 'v3', credentials=creds)
     blogger = build('blogger', 'v3', credentials=creds)
 
-    # Detección automática del blog
+    # Detección del blog
     try:
         user_blogs = blogger.blogs().listByUser(userId='self').execute()
         if 'items' in user_blogs and len(user_blogs['items']) > 0:
@@ -94,10 +151,9 @@ def main():
     publicado_despues = hace_siete_dias.strftime('%Y-%m-%dT00:00:00Z')
 
     videos_recolectados = []
-
     print("Iniciando recolección de videos...")
 
-    # A. Recolectar con filtro estricto de programas para Radio Al Son Del 23
+    # A. Recolectar con filtro estricto para Radio Al Son Del 23
     try:
         res_son = youtube.search().list(
             part='snippet',
@@ -116,7 +172,7 @@ def main():
     except HttpError as err:
         print(f"Error al consultar Radio Al Son Del 23: {err}")
 
-    # B. Recolectar todos los videos de los canales generales (incluyendo La Voz de la Mujer Bolivariana)
+    # B. Recolectar canales generales
     for canal_id in CANALES_GENERALES:
         try:
             res = youtube.search().list(
@@ -142,7 +198,7 @@ def main():
     print(f"Total de videos únicos recolectados: {len(videos_recolectados)}")
 
     # ---------------------------------------------------------
-    # 3. Crear la Playlist Semanal en YouTube
+    # 4. Crear Playlist en YouTube
     # ---------------------------------------------------------
     nombre_playlist = f"Resumen Comunal Semanal - {fecha_hoy.strftime('%d/%m/%Y')}"
     
@@ -162,7 +218,6 @@ def main():
     playlist_id = playlist['id']
     print(f"Playlist creada con éxito. ID: {playlist_id}")
 
-    # Agregar videos a la playlist con control de errores
     for video_id in videos_recolectados:
         try:
             youtube.playlistItems().insert(
@@ -182,7 +237,7 @@ def main():
             print(f"Advertencia al agregar video {video_id}: {err}")
 
     # ---------------------------------------------------------
-    # 4. Publicar en Blogger con iframe estándar
+    # 5. Publicar en Blogger
     # ---------------------------------------------------------
     codigo_iframe = f'''<div style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; background: #000; border-radius: 8px; overflow: hidden;">
     <iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" 
@@ -202,7 +257,21 @@ def main():
         body=blog_post
     ).execute()
 
-    print(f"Publicación creada con éxito en Blogger. URL: {post_creado.get('url')}")
+    url_blog_post = post_creado.get('url')
+    print(f"Publicación creada con éxito en Blogger. URL: {url_blog_post}")
+
+    # ---------------------------------------------------------
+    # 6. Enviar Alertas (Telegram y WhatsApp)
+    # ---------------------------------------------------------
+    mensaje_difusion = (
+        f"📢 *NUEVA PROGRAMACIÓN MULTIPLATAFORMA* 📡\n"
+        f"📅 Fecha: `{fecha_hoy.strftime('%d/%m/%Y')}`\n\n"
+        f"La parrilla semanal comunitaria ya se encuentra actualizada en YouTube y publicada.\n\n"
+        f"🔗 *Ver en el blog:* {url_blog_post}"
+    )
+
+    enviar_notificaciones_telegram(mensaje_difusion)
+    enviar_whatsapp_twilio(mensaje_difusion)
 
 if __name__ == '__main__':
     main()
