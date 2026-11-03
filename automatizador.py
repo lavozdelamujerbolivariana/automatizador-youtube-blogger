@@ -5,6 +5,7 @@ import time
 import urllib.request
 import urllib.parse
 import base64
+import re
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -127,6 +128,38 @@ def enviar_whatsapp_twilio(mensaje):
     except Exception as e:
         print(f"❌ Error al enviar WhatsApp: {e}")
 
+def actualizar_reproductor_en_blogger(blogger, blog_id, nuevo_playlist_id):
+    try:
+        print("Buscando la entrada del reproductor inteligente en Blogger...")
+        # Busca entradas que contengan el script del reproductor
+        posts = blogger.posts().list(blogId=blog_id, q="playlistSemanalID").execute()
+        
+        if 'items' in posts and len(posts['items']) > 0:
+            post = posts['items'][0]
+            post_id = post['id']
+            contenido_actual = post['content']
+            
+            # Reemplaza dinámicamente playlistSemanalID: "xxxx" por el nuevo ID
+            nuevo_contenido = re.sub(
+                r'(playlistSemanalID\s*:\s*["\'])([^"\']+)(["\'])',
+                r'\1' + nuevo_playlist_id + r'\3',
+                contenido_actual
+            )
+            
+            if nuevo_contenido != contenido_actual:
+                blogger.posts().patch(
+                    blogId=blog_id,
+                    postId=post_id,
+                    body={'content': nuevo_contenido}
+                ).execute()
+                print(f"✅ Reproductor inteligente actualizado en Blogger con la playlist: {nuevo_playlist_id}")
+            else:
+                print("ℹ️ El reproductor ya tenía asignado este ID de playlist.")
+        else:
+            print("⚠️ No se encontró la entrada con 'playlistSemanalID' en Blogger. El resumen semanal se publicó normalmente.")
+    except Exception as e:
+        print(f"❌ Error al intentar actualizar el reproductor en Blogger: {e}")
+
 # ---------------------------------------------------------
 # 3. Función Principal
 # ---------------------------------------------------------
@@ -217,6 +250,9 @@ def main():
 
     playlist_id = playlist['id']
     print(f"Playlist creada con éxito. ID: {playlist_id}")
+
+    # Sincronización automática con el reproductor del blog
+    actualizar_reproductor_en_blogger(blogger, blog_id, playlist_id)
 
     for video_id in videos_recolectados:
         try:
