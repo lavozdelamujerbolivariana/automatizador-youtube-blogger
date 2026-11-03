@@ -131,7 +131,6 @@ def enviar_whatsapp_twilio(mensaje):
 def actualizar_reproductor_en_blogger(blogger, blog_id, nuevo_playlist_id):
     try:
         print("Buscando la entrada del reproductor inteligente en Blogger...")
-        # Busca entradas que contengan el script del reproductor
         posts = blogger.posts().list(blogId=blog_id, q="playlistSemanalID").execute()
         
         if 'items' in posts and len(posts['items']) > 0:
@@ -139,7 +138,6 @@ def actualizar_reproductor_en_blogger(blogger, blog_id, nuevo_playlist_id):
             post_id = post['id']
             contenido_actual = post['content']
             
-            # Reemplaza dinámicamente playlistSemanalID: "xxxx" por el nuevo ID
             nuevo_contenido = re.sub(
                 r'(playlistSemanalID\s*:\s*["\'])([^"\']+)(["\'])',
                 r'\1' + nuevo_playlist_id + r'\3',
@@ -168,7 +166,6 @@ def main():
     youtube = build('youtube', 'v3', credentials=creds)
     blogger = build('blogger', 'v3', credentials=creds)
 
-    # Detección del blog
     try:
         user_blogs = blogger.blogs().listByUser(userId='self').execute()
         if 'items' in user_blogs and len(user_blogs['items']) > 0:
@@ -197,11 +194,12 @@ def main():
         ).execute()
 
         for item in res_son.get('items', []):
-            titulo = item['snippet']['title'].lower()
-            if any(prog in titulo for prog in PROGRAMAS_SON_DEL_23):
+            titulo_original = item['snippet']['title']
+            titulo_lower = titulo_original.lower()
+            if any(prog in titulo_lower for prog in PROGRAMAS_SON_DEL_23):
                 vid = item['id']['videoId']
-                if vid not in videos_recolectados:
-                    videos_recolectados.append(vid)
+                if not any(v['id'] == vid for v in videos_recolectados):
+                    videos_recolectados.append({'title': titulo_original, 'id': vid})
     except HttpError as err:
         print(f"Error al consultar Radio Al Son Del 23: {err}")
 
@@ -217,9 +215,10 @@ def main():
             ).execute()
 
             for item in res.get('items', []):
+                titulo_original = item['snippet']['title']
                 vid = item['id']['videoId']
-                if vid not in videos_recolectados:
-                    videos_recolectados.append(vid)
+                if not any(v['id'] == vid for v in videos_recolectados):
+                    videos_recolectados.append({'title': titulo_original, 'id': vid})
             time.sleep(0.5)
         except HttpError as err:
             print(f"Error al consultar el canal {canal_id}: {err}")
@@ -254,7 +253,8 @@ def main():
     # Sincronización automática con el reproductor del blog
     actualizar_reproductor_en_blogger(blogger, blog_id, playlist_id)
 
-    for video_id in videos_recolectados:
+    for video_item in videos_recolectados:
+        video_id = video_item['id']
         try:
             youtube.playlistItems().insert(
                 part='snippet',
@@ -297,13 +297,16 @@ def main():
     print(f"Publicación creada con éxito en Blogger. URL: {url_blog_post}")
 
     # ---------------------------------------------------------
-    # 6. Enviar Alertas (Telegram y WhatsApp)
+    # 6. Enviar Alertas (Telegram y WhatsApp con detalle de programas)
     # ---------------------------------------------------------
+    titulos_muestra = "\n".join([f"• {v['title']}" for v in videos_recolectados[:5]])
+
     mensaje_difusion = (
         f"📢 *NUEVA PROGRAMACIÓN MULTIPLATAFORMA* 📡\n"
         f"📅 Fecha: `{fecha_hoy.strftime('%d/%m/%Y')}`\n\n"
-        f"La parrilla semanal comunitaria ya se encuentra actualizada en YouTube y publicada.\n\n"
-        f"🔗 *Ver en el blog:* {url_blog_post}"
+        f"Se han recopilado *{len(videos_recolectados)}* contenidos comunitarios. Algunos destacados:\n\n"
+        f"{titulos_muestra}\n\n"
+        f"🔗 *Ver la parrilla completa en el blog:* {url_blog_post}"
     )
 
     enviar_notificaciones_telegram(mensaje_difusion)
