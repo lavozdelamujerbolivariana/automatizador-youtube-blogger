@@ -78,14 +78,13 @@ def obtener_credenciales():
     raise FileNotFoundError("No se encontraron credenciales en GOOGLE_TOKEN_JSON ni en token.json")
 
 def canal_id_a_playlist_uploads(canal_id):
-    """Convierte el ID de un canal (UC...) a su ID de playlist de subidas (UU...)"""
     if canal_id.startswith('UC'):
         return 'UU' + canal_id[2:]
     return canal_id
 
 def enviar_notificaciones_telegram(mensaje):
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
-    chats_destino = ["5164937007", "-1002636268384"] # Chat personal y Grupo ComunaTv
+    chats_destino = ["5164937007", "-1002636268384"]
     
     if not token:
         print("Telegram no configurado.")
@@ -186,9 +185,16 @@ def main():
     hace_siete_dias = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
 
     videos_recolectados = []
-    print("Iniciando recolección de videos usando listas de subidas (1 unidad de cuota/canal)...")
+    print("Iniciando recolección inteligente con límites por canal y respaldo histórico...")
 
-    # A. Recolectar con filtro estricto para Radio Al Son Del 23
+    # Límites específicos por canal
+    limites_canales = {
+        'UCGfoI7v6hNipgiG8C_IJjfQ': 8, # La Voz de la Mujer Bolivariana (hasta 8 videos)
+        'UC1r5CJoV6SvS8Cw3I9bfn-Q': 3, # 8Minutos Medio Alternativo
+        'UC3-grdwTAlgMyKAHmfI2H1A': 3  # DE LA MANO CON LAS COMUNIDADES
+    }
+
+    # A. Recolección especial para Radio Al Son Del 23 (Filtro estricto)
     try:
         playlist_son = canal_id_a_playlist_uploads(CANAL_SON_DEL_23)
         res_son = youtube.playlistItems().list(
@@ -197,47 +203,77 @@ def main():
             maxResults=15
         ).execute()
 
+        videos_son_canal = []
         for item in res_son.get('items', []):
             snippet = item['snippet']
             pub_str = snippet['publishedAt']
             pub_dt = datetime.datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
             
-            if pub_dt >= hace_siete_dias:
-                titulo_original = snippet['title']
-                titulo_lower = titulo_original.lower()
-                if any(prog in titulo_lower for prog in PROGRAMAS_SON_DEL_23):
-                    vid = snippet['resourceId']['videoId']
-                    if not any(v['id'] == vid for v in videos_recolectados):
-                        videos_recolectados.append({'title': titulo_original, 'id': vid})
+            titulo_original = snippet['title']
+            titulo_lower = titulo_original.lower()
+            if any(prog in titulo_lower for prog in PROGRAMAS_SON_DEL_23):
+                vid = snippet['resourceId']['videoId']
+                videos_son_canal.append({'title': titulo_original, 'id': vid, 'fecha': pub_dt})
+
+        recientes_son = [v for v in videos_son_canal if v['fecha'] >= hace_siete_dias]
+        if recientes_son:
+            for v in recientes_son:
+                if not any(x['id'] == v['id'] for x in videos_recolectados):
+                    videos_recolectados.append(v)
+        elif videos_son_canal:
+            videos_son_canal.sort(key=lambda x: x['fecha'], reverse=True)
+            v_viejo = videos_son_canal[0]
+            if not any(x['id'] == v_viejo['id'] for x in videos_recolectados):
+                videos_recolectados.append(v_viejo)
     except HttpError as err:
         print(f"Error al consultar Radio Al Son Del 23: {err}")
 
-    # B. Recolectar canales generales de la red
+    # B. Recolección para el resto de canales generales
     for canal_id in CANALES_GENERALES:
+        max_vids = limites_canales.get(canal_id, 2) # Por defecto 2 videos para los demás
         try:
             playlist_id = canal_id_a_playlist_uploads(canal_id)
             res = youtube.playlistItems().list(
                 part='snippet',
                 playlistId=playlist_id,
-                maxResults=5
+                maxResults=15
             ).execute()
 
+            videos_canal = []
             for item in res.get('items', []):
                 snippet = item['snippet']
                 pub_str = snippet['publishedAt']
                 pub_dt = datetime.datetime.fromisoformat(pub_str.replace('Z', '+00:00'))
                 
-                if pub_dt >= hace_siete_dias:
-                    titulo_original = snippet['title']
-                    vid = snippet['resourceId']['videoId']
-                    if not any(v['id'] == vid for v in videos_recolectados):
-                        videos_recolectados.append({'title': titulo_original, 'id': vid})
+                titulo_original = snippet['title']
+                vid = snippet['resourceId']['videoId']
+                videos_canal.append({'title': titulo_original, 'id': vid, 'fecha': pub_dt})
+
+            recientes = [v for v in videos_canal if v['fecha'] >= hace_siete_dias]
+            
+            agregados_del_canal = 0
+            if recientes:
+                for v in recientes:
+                    if agregados_del_canal >= max_vids:
+                        break
+                    if not any(x['id'] == v['id'] for x in videos_recolectados):
+                        videos_recolectados.append(v)
+                        agregados_del_canal += 1
+            
+            # Respaldo histórico si no hubo recientes o faltaron cupos para este canal
+            if agregados_del_canal == 0 and videos_canal:
+                videos_canal.sort(key=lambda x: x['fecha'], reverse=True)
+                for v_viejo in videos_canal:
+                    if not any(x['id'] == v_viejo['id'] for x in videos_recolectados):
+                        videos_recolectados.append(v_viejo)
+                        break
+
             time.sleep(0.1)
         except HttpError as err:
             print(f"Error al consultar el canal {canal_id}: {err}")
 
     if not videos_recolectados:
-        print("No se encontraron videos nuevos en los canales durante los últimos 7 días.")
+        print("No se encontraron videos disponibles en los canales.")
         return
 
     print(f"Total de videos únicos recolectados: {len(videos_recolectados)}")
@@ -263,7 +299,6 @@ def main():
     playlist_id = playlist['id']
     print(f"Playlist creada con éxito. ID: {playlist_id}")
 
-    # Sincronización automática con el reproductor del blog
     actualizar_reproductor_en_blogger(blogger, blog_id, playlist_id)
 
     for video_item in videos_recolectados:
@@ -310,7 +345,7 @@ def main():
     print(f"Publicación creada con éxito en Blogger. URL: {url_blog_post}")
 
     # ---------------------------------------------------------
-    # 6. Enviar Alertas (Telegram y WhatsApp con detalle de programas)
+    # 6. Enviar Alertas (Telegram y WhatsApp)
     # ---------------------------------------------------------
     titulos_muestra = "\n".join([f"• {v['title']}" for v in videos_recolectados[:5]])
 
