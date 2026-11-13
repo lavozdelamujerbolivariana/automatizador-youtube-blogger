@@ -4,7 +4,6 @@ import datetime
 import time
 import urllib.request
 import urllib.parse
-import base64
 import re
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -105,34 +104,6 @@ def enviar_notificaciones_telegram(mensaje):
         except Exception as e:
             print(f"❌ Error en Telegram para ID {chat_id}: {e}")
 
-def enviar_whatsapp_twilio(mensaje):
-    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
-    auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
-    from_whatsapp = os.environ.get('TWILIO_WHATSAPP_FROM')
-    to_whatsapp = os.environ.get('WHATSAPP_TO_GROUP')
-
-    if not all([account_sid, auth_token, from_whatsapp, to_whatsapp]):
-        print("Twilio/WhatsApp no configurado. Saltando.")
-        return
-
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-    auth_str = f"{account_sid}:{auth_token}"
-    encoded_auth = base64.b64encode(auth_str.encode('ascii')).decode('ascii')
-    
-    data = urllib.parse.urlencode({
-        'From': from_whatsapp,
-        'To': to_whatsapp,
-        'Body': mensaje
-    }).encode('utf-8')
-
-    try:
-        req = urllib.request.Request(url, data=data, method='POST')
-        req.add_header('Authorization', f'Basic {encoded_auth}')
-        with urllib.request.urlopen(req) as response:
-            print("✅ Mensaje enviado a WhatsApp con éxito.")
-    except Exception as e:
-        print(f"❌ Error al enviar WhatsApp: {e}")
-
 def actualizar_reproductor_en_blogger(blogger, blog_id, nuevo_playlist_id):
     try:
         print("Buscando la entrada del reproductor inteligente en Blogger...")
@@ -187,14 +158,13 @@ def main():
     videos_recolectados = []
     print("Iniciando recolección inteligente con límites por canal y respaldo histórico...")
 
-    # Límites específicos por canal
     limites_canales = {
         'UCGfoI7v6hNipgiG8C_IJjfQ': 8, # La Voz de la Mujer Bolivariana (hasta 8 videos)
         'UC1r5CJoV6SvS8Cw3I9bfn-Q': 3, # 8Minutos Medio Alternativo
         'UC3-grdwTAlgMyKAHmfI2H1A': 3  # DE LA MANO CON LAS COMUNIDADES
     }
 
-    # A. Recolección especial para Radio Al Son Del 23 (Filtro estricto)
+    # A. Recolección especial para Radio Al Son Del 23
     try:
         playlist_son = canal_id_a_playlist_uploads(CANAL_SON_DEL_23)
         res_son = youtube.playlistItems().list(
@@ -230,7 +200,7 @@ def main():
 
     # B. Recolección para el resto de canales generales
     for canal_id in CANALES_GENERALES:
-        max_vids = limites_canales.get(canal_id, 2) # Por defecto 2 videos para los demás
+        max_vids = limites_canales.get(canal_id, 2)
         try:
             playlist_id = canal_id_a_playlist_uploads(canal_id)
             res = youtube.playlistItems().list(
@@ -260,7 +230,6 @@ def main():
                         videos_recolectados.append(v)
                         agregados_del_canal += 1
             
-            # Respaldo histórico si no hubo recientes o faltaron cupos para este canal
             if agregados_del_canal == 0 and videos_canal:
                 videos_canal.sort(key=lambda x: x['fecha'], reverse=True)
                 for v_viejo in videos_canal:
@@ -321,7 +290,7 @@ def main():
             print(f"Advertencia al agregar video {video_id}: {err}")
 
     # ---------------------------------------------------------
-    # 5. Publicar en Blogger
+    # 5. Publicar en Blogger (Con mensaje de reconocimiento)
     # ---------------------------------------------------------
     codigo_iframe = f'''<div style="position: relative; width: 100%; padding-bottom: 56.25%; height: 0; background: #000; border-radius: 8px; overflow: hidden;">
     <iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;" 
@@ -331,9 +300,15 @@ def main():
     </iframe>
 </div>'''
 
+    contenido_blog = f'''
+    <p><b>¡Reconocimiento y Agradecimiento Popular!</b> Expresamos nuestro profundo agradecimiento a todas las productoras, colectivos, medios comunitarios y espacios hermanos que con su labor constante y compromiso revolucionario hacen posible este valioso material audiovisual.</p>
+    <p>Compartimos la programación y resumen semanal correspondiente:</p>
+    {codigo_iframe}
+    '''
+
     blog_post = {
         'title': nombre_playlist,
-        'content': f"<p>Compartimos la programación y resumen audiovisual correspondiente a esta semana:</p>{codigo_iframe}"
+        'content': contenido_blog
     }
 
     post_creado = blogger.posts().insert(
@@ -345,20 +320,21 @@ def main():
     print(f"Publicación creada con éxito en Blogger. URL: {url_blog_post}")
 
     # ---------------------------------------------------------
-    # 6. Enviar Alertas (Telegram y WhatsApp)
+    # 6. Enviar Alertas (Telegram con Reconocimiento)
     # ---------------------------------------------------------
     titulos_muestra = "\n".join([f"• {v['title']}" for v in videos_recolectados[:5]])
 
     mensaje_difusion = (
-        f"📢 *NUEVA PROGRAMACIÓN MULTIPLATAFORMA* 📡\n"
+        f"📢 *NUEVA PROGRAMACIÓN Y RESUMEN COMUNAL* 📡\n"
         f"📅 Fecha: `{fecha_hoy.strftime('%d/%m/%Y')}`\n\n"
-        f"Se han recopilado *{len(videos_recolectados)}* contenidos comunitarios. Algunos destacados:\n\n"
+        f"🌟 *Reconocimiento y Agradecimiento Especial* a todas las productoras, colectivos y medios comunitarios que hacen posible este contenido con su constancia y compromiso.\n\n"
+        f"🎥 *Contenidos integrados esta semana:*\n"
         f"{titulos_muestra}\n\n"
-        f"🔗 *Ver la parrilla completa en el blog:* {url_blog_post}"
+        f"🔗 *Ver la parrilla completa y el reproductor en el blog:* {url_blog_post}\n\n"
+        f"✊ _¡La verdad y la cultura del pueblo se multiplican en red!_"
     )
 
     enviar_notificaciones_telegram(mensaje_difusion)
-    enviar_whatsapp_twilio(mensaje_difusion)
 
 if __name__ == '__main__':
     main()
